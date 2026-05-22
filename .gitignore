@@ -1,0 +1,11 @@
+.env
+.env.local
+.env.*.local
+node_modules/
+uploads/
+.claude/
+*credentials*.json
+*credential*.json
+*-key.json
+*serviceaccount*.json
+*service-account*.json

@@ -11,7 +11,7 @@ const router = express.Router();
 const caseUploadDir = path.resolve('uploads/cases');
 fs.mkdirSync(caseUploadDir, { recursive: true });
 
-const PHOTO_MIME = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+const PHOTO_MIME = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif']);
 
 const photoStorage = multer.diskStorage({
   destination: caseUploadDir,

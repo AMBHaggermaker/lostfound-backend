@@ -1,0 +1,3 @@
+ALTER TABLE lf_cases
+  ADD COLUMN IF NOT EXISTS location_lat NUMERIC,
+  ADD COLUMN IF NOT EXISTS location_lng NUMERIC;

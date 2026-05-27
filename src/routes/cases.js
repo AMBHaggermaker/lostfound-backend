@@ -56,6 +56,7 @@ router.get('/', authenticate.optional, async (req, res, next) => {
     const result = await pool.query(
       `SELECT c.id, c.title, c.subject_name, c.subject_type, c.last_seen_location,
               c.last_seen_at, c.status, c.tags, c.created_at, c.updated_at,
+              c.location_lat, c.location_lng,
               u.username, u.id AS poster_id,
               ${PHOTOS_SQL}, ${TIPS_COUNT_SQL}
        FROM lf_cases c
@@ -75,7 +76,8 @@ router.post('/', authenticate, (req, res, next) => {
     if (err) return next(err);
     try {
       const { title, description, subject_name, subject_type = 'person',
-              last_seen_location, last_seen_at, contact_info, tags } = req.body;
+              last_seen_location, last_seen_at, contact_info, tags,
+              location_lat, location_lng } = req.body;
 
       if (!title?.trim()) return res.status(400).json({ error: 'title is required' });
       if (!description?.trim()) return res.status(400).json({ error: 'description is required' });
@@ -91,15 +93,17 @@ router.post('/', authenticate, (req, res, next) => {
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
+        const lat = location_lat ? parseFloat(location_lat) : null;
+        const lng = location_lng ? parseFloat(location_lng) : null;
         const caseResult = await client.query(
           `INSERT INTO lf_cases (user_id, title, description, subject_name, subject_type,
-            last_seen_location, last_seen_at, contact_info, tags)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            last_seen_location, last_seen_at, contact_info, tags, location_lat, location_lng)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
            RETURNING *`,
           [req.user.id, title.trim(), description.trim(),
            subject_name?.trim() || null, subject_type,
            last_seen_location?.trim() || null, last_seen_at || null,
-           contact_info?.trim() || null, parsedTags]
+           contact_info?.trim() || null, parsedTags, lat, lng]
         );
         const lostCase = caseResult.rows[0];
 
@@ -116,6 +120,25 @@ router.post('/', authenticate, (req, res, next) => {
         res.status(201).json({ ...lostCase, photos: req.files.map((f, i) => ({
           url: `/api/uploads/cases/${f.filename}`, mime_type: f.mimetype, is_primary: i === 0,
         })), tip_count: 0 });
+
+        // Geocode asynchronously if no coords but location text provided
+        if (!lat && lostCase.last_seen_location) {
+          const https = require('https');
+          const geocodeUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(lostCase.last_seen_location)}&format=json&limit=1&countrycodes=us`;
+          https.get(geocodeUrl, { headers: { 'User-Agent': 'LostFoundPlatform/1.0' } }, gRes => {
+            let d = '';
+            gRes.on('data', c => d += c);
+            gRes.on('end', () => {
+              try {
+                const r = JSON.parse(d);
+                if (r.length) {
+                  pool.query('UPDATE lf_cases SET location_lat=$1, location_lng=$2 WHERE id=$3',
+                    [parseFloat(r[0].lat), parseFloat(r[0].lon), lostCase.id]).catch(()=>{});
+                }
+              } catch {}
+            });
+          }).on('error', () => {});
+        }
       } catch (e) {
         await client.query('ROLLBACK');
         req.files?.forEach(f => fs.unlink(f.path, () => {}));
@@ -125,6 +148,28 @@ router.post('/', authenticate, (req, res, next) => {
       }
     } catch (err) { next(err); }
   });
+});
+
+// GET /api/cases/map  — all cases with location data for map
+router.get('/map', async (req, res, next) => {
+  try {
+    const { status } = req.query;
+    const where = status ? `WHERE c.status = $1` : `WHERE c.status != 'resolved'`;
+    const params = status ? [status] : [];
+    const result = await pool.query(
+      `SELECT c.id, c.title, c.subject_name, c.subject_type, c.last_seen_location,
+              c.last_seen_at, c.status, c.location_lat, c.location_lng,
+              u.username,
+              (SELECT cp.url FROM lf_case_photos cp WHERE cp.case_id=c.id AND cp.is_primary=TRUE LIMIT 1) AS primary_photo
+       FROM lf_cases c
+       JOIN users u ON u.id = c.user_id
+       ${where}
+       ORDER BY c.created_at DESC
+       LIMIT 200`,
+      params
+    );
+    res.json(result.rows);
+  } catch (err) { next(err); }
 });
 
 // GET /api/cases/:id

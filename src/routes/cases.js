@@ -121,6 +121,22 @@ router.post('/', authenticate, (req, res, next) => {
           url: `/api/uploads/cases/${f.filename}`, mime_type: f.mimetype, is_primary: i === 0,
         })), tip_count: 0 });
 
+        // Mesh broadcast for new person searches (fire-and-forget)
+        if (subject_type === 'person') {
+          const meshKey = process.env.MESH_BRIDGE_KEY;
+          const meshApi = (process.env.MESH_API_URL || 'http://localhost:3001').replace(/\/$/, '');
+          if (meshKey) {
+            const loc  = lostCase.last_seen_location ? ` — last seen ${lostCase.last_seen_location}` : '';
+            const name = lostCase.subject_name ? ` ${lostCase.subject_name}` : '';
+            const text = `[LOST & FOUND]${name}${loc} — ${lostCase.title}. Tips: lostfound.unprecedentedtimes.org/cases/${lostCase.id}`;
+            fetch(`${meshApi}/api/mesh/broadcast`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${meshKey}` },
+              body: JSON.stringify({ text, source: 'lostfound' }),
+            }).catch(() => {});
+          }
+        }
+
         // Geocode asynchronously if no coords but location text provided
         if (!lat && lostCase.last_seen_location) {
           const https = require('https');
